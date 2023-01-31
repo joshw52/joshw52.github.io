@@ -64,23 +64,27 @@ MAC Address: 02:96:92:55:61:33 (Unknown)
 Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
 ```
 
-Ports 22, 80, and 8765 were open.  Nmap indicated one disallowed entry in the `robots.txt` file, but it was just `/`.
+Ports 22, 80, and 8765 were open.  First I started by looking at the page at port 80:
 
-There was also a `/custom/` directory on port 80, and there was a file `/custom/js/users.bak`.  I downloaded the file, and ran `file users.bak`, which gave me `SQLite 3.x database, last written using SQLite version 3034001`.  Turns out its a sqlite3 file.  I opened it using `sqlite3 users.bak`, ran `.tables`, then `select * from users;` on the users table I found, revealing one entry with a password hash for an `admin` user.  
+![](/img/tryhackme/mustacchio/mustacchio_home_page.png)
+
+Nmap indicated one disallowed entry in the `robots.txt` file, but it was just `/`.  There was also a `/custom/` directory on port 80, and in `/custom/js/` there was a file `users.bak`.  I downloaded the file, and ran `file users.bak`, which gave me `SQLite 3.x database, last written using SQLite version 3034001`.  Turns out it's a sqlite3 file.  I opened it in `sqlite3` and found a table `users` with one entry, the user `admin` with a password hash:  
 
 ![](/img/tryhackme/mustacchio/mustacchio_users_bak.png)
 
-I put this hash into a file `hash.txt` and tried to crack it with `john` using the command `john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt`, and I got the password.
+I put this hash into a file `hash.txt` and tried to crack it with `john` using the command `john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt`, and I got the password:
 
 ![](/img/tryhackme/mustacchio/mustacchio_john_crack_users_bak.png)
 
-I tried to ssh with this user but got a `Permission denied (publickey)` error, so these weren't SSH credentials.  I did discover another HTTP service open on port 8765, which had a login page.  I tried the credentials there and successfully logged in.
+I tried to ssh with this user but got a `Permission denied (publickey)` error, so these weren't SSH credentials.  From nmap I discovered earlier another HTTP service open on port 8765, which had a login page:
 
-This took me to an admin panel with a single input:
+![](/img/tryhackme/mustacchio/mustacchio_admin_panel_login.png)
+
+I tried the credentials there and successfully logged in.  This took me to an admin panel with a single input:
 
 ![](/img/tryhackme/mustacchio/mustacchio_admin_panel.png)
 
-Looking through the source code revealed a script with a `/auth/dontforget.bak` file, as well as a comment to Barry about his SSH key:
+I looked through the source code and found a script with a reference to a `/auth/dontforget.bak` file, as well as a comment to Barry about his SSH key:
 
 ![](/img/tryhackme/mustacchio/mustacchio_admin_source_code.png)
 
@@ -88,15 +92,15 @@ The `dontforget.bak` file turned out to contain XML code:
 
 ![](/img/tryhackme/mustacchio/mustacchio_dontforget.png)
 
-Going back to the site, entering some text in the input and clicking Submit gives a result at the bottom with name, author, and comment fields:
+In the input field I had found, I entered some text in the input and clicked Submit, after which I saw a result at the bottom with name, author, and comment fields:
 
 ![](/img/tryhackme/mustacchio/mustacchio_admin_panel_result.png)
 
-Clicking Submit with nothing in the text input gives an alert message telling us to put in XML code:
+I also tried clicking Submit with nothing in the text input, which gave an alert message telling me to put in XML code:
 
 ![](/img/tryhackme/mustacchio/mustacchio_admin_panel_blank.png)
 
-Inputing the XML code from `dontforget.bak` gives a result with a filled in name, author, and comment:
+I used the XML code from `dontforget.bak`, and the page filled in the name, author, and comment:
 
 ![](/img/tryhackme/mustacchio/mustacchio_admin_panel_xml.png)
 
@@ -114,7 +118,7 @@ This field looked worth testing for XXE vulnerabilities.  Using the following pa
 
 ![](/img/tryhackme/mustacchio/mustacchio_admin_panel_xxe_etc_passwd.png)
 
-Looks like from this file we see there are users joe and barry, and I tried modifying the above payload to see if we can get a result for a `user.txt` file.  Turns out that replacing `/etc/passwd` with `/home/barry/user.txt` gives us the first flag.
+From this output I saw there were users `joe` and `barry`, and I tried modifying the above payload to see if I could get a result for a `user.txt` file.  Turns out that replacing `/etc/passwd` with `/home/barry/user.txt` gave me the first flag.
 
 ![](/img/tryhackme/mustacchio/mustacchio_user_flag.png)
 
@@ -134,9 +138,9 @@ I then base64 decoded the string, and saved it to a file `id_rsa` and updated it
 
 ![](/img/tryhackme/mustacchio/mustacchio_ssh_key_passphrase_john.png)
 
-Using the found ssh key and passphrase got me logged in as `barry` in `/home/barry`.  I already saw the flag in `user.txt`.
+I was able to use the key and passphrase to log in as `barry`, starting me at `/home/barry` on the server.  I had already seen the flag in `/home/barry/user.txt`.
 
-After looking around in barry's and joe's home directories, I found a `live_log` program in `/home/joe/` that was suid as root.  After running `strings live_log`, I found the string `tail -f /var/log/nginx/access.log`, looks like this program runs `tail`.  I figured I could create my own version of `tail` in `/tmp` and update `PATH` to use my version of `tail` as `root` when running `live_log`.  I made a program `/tmp/tail` with the following code:
+After looking around in barry's and joe's home directories, I found a `live_log` program in `/home/joe/` that had SUID permissions as root.  After running `strings live_log`, I found the string `tail -f /var/log/nginx/access.log`. Since it looked like this program ran `tail`, I figured I could create my own version of `tail` in `/tmp` and update `PATH` to use my version of `tail` as `root` when running `live_log`.  I made a program `/tmp/tail` with the following code:
 
 ```
 #!/bin/bash
@@ -147,6 +151,3 @@ After looking around in barry's and joe's home directories, I found a `live_log`
 I then updated its permissions with `chmod +x /tmp/tail`, updated `PATH` to have `/tmp` first using the command `export PATH=/tmp:$PATH`, then ran the `live_log` program.  This escalated my privileges to root, and from here I was able to find and view the root flag:
 
 ![](/img/tryhackme/mustacchio/mustacchio_priv_esc.png)
-
-
-
